@@ -11,47 +11,9 @@ fancy_echo() {
   printf "\n$fmt\n" "$@"
 }
 
-append_to_zshrc() {
-  local text="$1" zshrc
-  local skip_new_line="$2"
-
-  if [ -w "$HOME/.zshrc.local" ]; then
-    zshrc="$HOME/.zshrc.local"
-  else
-    zshrc="$HOME/.zshrc"
-  fi
-
-  if ! grep -Fqs "$text" "$zshrc"; then
-    if [ "$skip_new_line" -eq 1 ]; then
-      printf "%s\n" "$text" >> "$zshrc"
-    else
-      printf "\n%s\n" "$text" >> "$zshrc"
-    fi
-  fi
-}
-
 trap 'ret=$?; test $ret -ne 0 && printf "failed\n\n" >&2; exit $ret' EXIT
 
 set -e
-
-if [ ! -d "$HOME/.bin/" ]; then
-  mkdir "$HOME/.bin"
-fi
-
-if [ ! -f "$HOME/.zshrc" ]; then
-  touch "$HOME/.zshrc"
-fi
-
-# shellcheck disable=SC2016
-append_to_zshrc 'export PATH="$HOME/.bin:$PATH"'
-
-case "$SHELL" in
-  */zsh) : ;;
-  *)
-    fancy_echo "Changing your shell to zsh ..."
-      chsh -s "$(which zsh)"
-    ;;
-esac
 
 brew_install_or_upgrade() {
   if brew_is_installed "$1"; then
@@ -113,15 +75,31 @@ gem_install_or_update() {
   fi
 }
 
+install_xcode_command_line_tools() {
+if [ -z "$(xcode-select --print-path 2>/dev/null)" ] || [ -z "$(git --version 2>/dev/null)" ]; then
+  xcode-select --install 2>/dev/null
+  while true; do
+    sleep 5
+    if [ -n "$(git --version 2>/dev/null)" ] && [ -n "$(xcode-select --print-path 2>/dev/null)" ]; then
+      break;
+    fi
+  done
+  echo "It looks like the other install is finishing up."
+  echo "This installation will begin in one minute."
+  sleep 60
+else
+  echo "XCode Command Line Tools already installed"
+fi
+}
+
+fancy_echo "Installing XCode Command Line Tools ..."
+fancy_echo "XCode Command Line Tools Installation Window May Be Behind This Window."
+install_xcode_command_line_tools
+
 if ! command -v brew >/dev/null; then
   fancy_echo "Installing Homebrew ..."
     curl -fsS \
       'https://raw.githubusercontent.com/Homebrew/install/master/install' | ruby
-
-    append_to_zshrc '# recommended by brew doctor'
-
-    # shellcheck disable=SC2016
-    append_to_zshrc 'export PATH="/usr/local/bin:$PATH"' 1
 
     export PATH="/usr/local/bin:$PATH"
 else
@@ -132,56 +110,93 @@ fancy_echo "Updating Homebrew formulas ..."
 brew update
 
 brew_install_or_upgrade 'git'
-brew_install_or_upgrade 'postgres'
-brew_launchctl_restart 'postgresql'
+brew_install_or_upgrade 'hub'
 brew_install_or_upgrade 'redis'
 brew_launchctl_restart 'redis'
-brew_install_or_upgrade 'the_silver_searcher'
+brew_install_or_upgrade 'mysql'
 brew_install_or_upgrade 'vim'
-brew_install_or_upgrade 'ctags'
-brew_install_or_upgrade 'tmux'
-brew_install_or_upgrade 'reattach-to-user-namespace'
 brew_install_or_upgrade 'imagemagick'
+brew_install_or_upgrade 'phantomjs'
 brew_install_or_upgrade 'qt'
-brew_install_or_upgrade 'hub'
-brew_install_or_upgrade 'node'
-
 brew_install_or_upgrade 'rbenv'
 brew_install_or_upgrade 'ruby-build'
-
-# shellcheck disable=SC2016
-append_to_zshrc 'eval "$(rbenv init - zsh --no-rehash)"' 1
-
-brew_install_or_upgrade 'openssl'
-brew unlink openssl && brew link openssl --force
+echo 'eval "$(rbenv init -)"' >> ~/.bash_profile
+source ~/.bash_profile
 brew_install_or_upgrade 'libyaml'
+brew_install_or_upgrade 'libxml2'
+brew_install_or_upgrade 'libxslt'
 
-ruby_version="$(curl -sSL http://ruby.thoughtbot.com/latest)"
-
-eval "$(rbenv init - zsh)"
+ruby_version=2.1.5
 
 if ! rbenv versions | grep -Fq "$ruby_version"; then
   rbenv install -s "$ruby_version"
 fi
 
 rbenv global "$ruby_version"
-rbenv shell "$ruby_version"
-
-gem update --system
-
-gem_install_or_update 'bundler'
+rbenv exec gem update --system
+gem_install_or_update 'rails'
 
 fancy_echo "Configuring Bundler ..."
+  gem_install_or_update 'bundler'
   number_of_cores=$(sysctl -n hw.ncpu)
   bundle config --global jobs $((number_of_cores - 1))
 
-brew_install_or_upgrade 'heroku-toolbelt'
+fancy_echo "Configuring template dotfiles ..."
+if [ -d "$HOME/dotfiles" ]; then
+  fancy_echo "Directory $HOME/dotfiles already exists. Skipping ..."
+else
+  git clone https://github.com/adamgeorgeson/dotfiles.git
+fi
+ln -nfs ~/dotfiles/vim/ .vim
+ln -nfs ~/dotfiles/vimrc .vimrc
+ln -nfs ~/dotfiles/bash_profile .bash_profile
+ln -nfs ~/dotfiles/bash_aliases .bash_aliases
+ln -nfs ~/dotfiles/gitconfig .gitconfig
+source ~/.bash_profile
+source ~/.bash_aliases
 
-if ! command -v rcup >/dev/null; then
-  brew_tap 'thoughtbot/formulae'
-  brew_install_or_upgrade 'rcm'
+fancy_echo "Setting up VIM ..."
+if [ -d "$HOME/.vim/bundle/Vundle.vim" ]; then
+  fancy_echo "Vundle already installed. Skipping ..."
+else
+  fancy_echo "Installing Vundle ..."
+  git clone https://github.com/gmarik/Vundle.vim.git ~/.vim/bundle/Vundle.vim
+fi
+fancy_echo "Open VIM and enter ':PluginInstall' to install plugins defined in .vimrc"
+
+fancy_echo "Configuring MySQL ..."
+unset TMPDIR
+mysql_install_db --verbose --user=`whoami` --basedir="$(brew --prefix mysql)" --datadir=/usr/local/var/mysql --tmpdir=/tmp
+mkdir -p ~/Library/LaunchAgents
+cp $(brew --prefix mysql)/homebrew.mxcl.mysql.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/homebrew.mxcl.mysql.plist
+echo "Please edit the plist file (~/Library/LaunchAgents/homebrew.mxcl.mysql.plist) ensuring the following keys exist:"
+echo "#..."
+echo "<key>UserName</key>"
+echo "<string>root</string>"
+echo "#..."
+echo "Complete? Type 'Yes' to continue."
+read -p "Are you sure you want to continue? <y/Y/yes/Yes> " prompt
+if [[ $prompt == "y" || $prompt == "Y" || $prompt == "yes" || $prompt == "Yes" ]]
+then
+  $(brew --prefix mysql)/bin/mysqladmin -u root password 'admin'
+else
+  "Please type 'yes' once you have added the UserName key to homebrew.mxcl.mysql.plist"
 fi
 
 if [ -f "$HOME/.laptop.local" ]; then
   . "$HOME/.laptop.local"
 fi
+
+fancy_echo "####################################################################################"
+fancy_echo "################################ Next Steps ########################################"
+fancy_echo "####################################################################################"
+
+fancy_echo "Next Steps:"
+fancy_echo "Configure SSH Keys for GitHub: https://help.github.com/articles/generating-ssh-keys/"
+fancy_echo "Install iTerm2: https://iterm2.com/downloads.html"
+fancy_echo "Install Powerline fonts to ITerm2: https://github.com/powerline/fonts"
+
+fancy_echo "####################################################################################"
+fancy_echo "############################ COMPLETE : GO CODE!!! #################################"
+fancy_echo "####################################################################################"
