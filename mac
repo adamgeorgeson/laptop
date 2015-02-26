@@ -108,6 +108,8 @@ fi
 
 fancy_echo "Updating Homebrew formulas ..."
 brew update
+brew tap homebrew/dupes
+brew install apple-gcc42 && brew link apple-gcc42
 
 brew_install_or_upgrade 'git'
 brew_install_or_upgrade 'hub'
